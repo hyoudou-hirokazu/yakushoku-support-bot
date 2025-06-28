@@ -6,7 +6,9 @@ import time # 時間計測のために追加
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, GetProfileRequest # GetProfileRequestを追加
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest
+# !!! ここを修正しました: GetProfileRequest のインポートパスを linebot.v3.messaging.models に変更 !!!
+from linebot.v3.messaging.models import GetProfileRequest 
 from linebot.v3.messaging import TextMessage as LineReplyTextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
@@ -19,31 +21,71 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 
-# 環境変数からLINEとGeminiのAPIキーを取得 (変更なし)
+# .envファイルから環境変数を読み込む（Renderでは環境変数が自動的に設定されるため、この行はコメントアウトを維持）
+# from dotenv import load_dotenv # load_dotenvはコメントアウトを維持
+# load_dotenv()
+
+# 環境変数からLINEとGeminiのAPIキーを取得
 CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-# 環境変数が設定されているか確認 (変更なし)
-# ...
+# 環境変数が設定されているか確認
+if not CHANNEL_ACCESS_TOKEN:
+    logging.critical("CHANNEL_ACCESS_TOKEN is not set in environment variables.")
+    raise ValueError("CHANNEL_ACCESS_TOKEN is not set. Please set it in Render Environment Variables.")
+if not CHANNEL_SECRET:
+    logging.critical("CHANNEL_SECRET is not set in environment variables.")
+    raise ValueError("CHANNEL_SECRET is not set. Please set it in Render Environment Variables.")
+if not GEMINI_API_KEY:
+    logging.critical("GEMINI_API_KEY is not set in environment variables.")
+    raise ValueError("GEMINI_API_KEY is not set. Please set it in Render Environment Variables.")
+# PORT環境変数がない場合のエラーチェック。Gunicornがこれを必要とするため。
+if not os.getenv('PORT'):
+    logging.critical("PORT environment variable is not set by Render. This is unexpected for a Web Service.")
+    raise ValueError("PORT environment variable is not set. Ensure this is deployed on a platform like Render.")
 
-# LINE Messaging API v3 の設定 (変更なし)
-# ...
+# LINE Messaging API v3 の設定
+try:
+    configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+    line_bot_api = MessagingApi(ApiClient(configuration))
+    handler = WebhookHandler(CHANNEL_SECRET)
+    logging.info("LINE Bot SDK configured successfully.")
+except Exception as e:
+    logging.critical(f"Failed to configure LINE Bot SDK: {e}. Please check CHANNEL_ACCESS_TOKEN and CHANNEL_SECRET.")
+    raise Exception(f"LINE Bot SDK configuration failed: {e}")
 
-# Gemini API の設定 (変更なし)
-# ...
+# Gemini API の設定
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    # ユーザー指定のモデル名 'gemini-2.5-flash-lite-preview-06-17' を使用
+    gemini_model = genai.GenerativeModel(
+        'gemini-2.5-flash-lite-preview-06-17',
+        safety_settings={
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+    )
+    logging.info("Gemini API configured successfully using 'gemini-2.5-flash-lite-preview-06-17' model.")
+except Exception as e:
+    logging.critical(f"Failed to configure Gemini API: {e}. Please check GEMINI_API_KEY and 'google-generativeai' library version in requirements.txt. Also ensure 'gemini-2.5-flash-lite-preview-06-17' model is available for your API Key/Region.")
+    raise Exception(f"Gemini API configuration failed: {e}")
 
 # --- チャットボット関連の設定 ---
-MAX_GEMINI_REQUESTS_PER_DAY = 20
+MAX_GEMINI_REQUESTS_PER_DAY = 20    # 1ユーザーあたり1日20回まで (無料枠考慮)
 
-# プロンプトの簡潔化を検討 (ここがパフォーマンスに大きく影響します)
-# MANAGEMENT_SUPPORT_SYSTEM_PROMPT = """
-# あなたは障害福祉施設で働くサービス管理責任者、主任といった管理職・プレイングマネージャーの皆様をサポートするAI、「役職者お悩みサポート」です。
-# ... (内容を大幅に削り、要点のみに絞る)
-# 例:
+# プロンプトを社会福祉法人SHIPの支援者向けサポートAIに調整
+# ボット名を「支援メイトBot」に変更し、提供された構造と条件を反映
+# --- 最適化のポイント: プロンプトの簡潔化 ---
+# このプロンプトは非常に長いです。LLMの応答速度は入力トークン数に大きく依存します。
+# 応答速度を向上させるためには、本当に必要な指示や情報に絞り込み、冗長な表現を削除することを強く推奨します。
+# 例として、コメントでさらに簡潔化の方向性を示しますが、具体的な調整は機能性と速度のバランスを考慮して行ってください。
 MANAGEMENT_SUPPORT_SYSTEM_PROMPT = """
 あなたは障害福祉施設の管理職向けAIサポート「役職者お悩みサポート」です。
-組織運営、人材育成、利用者支援、事業展開、法令遵守に関する悩みに、傾聴と共感を持ち、実践的かつ具体的なアドバイスを提供します。
+組織運営、人材育成、利用者支援、事業展開、法令遵守に関する悩みに、傾聴と共感を持ち、実践的かつ具体的なアドバイスを端的に提供してください。
+
 **重要事項:**
 1.  **傾聴と共感:** ユーザーの感情を汲み取りねぎらう。
 2.  **事業所種別配慮:** （例: グループホーム、B型など）特性を踏まえたアドバイス。
@@ -76,11 +118,14 @@ GEMINI_LIMIT_MESSAGE = """
 明日、またお会いできることを楽しみにしております。
 """
 
+# 過去の会話履歴をGeminiに渡す最大ターン数
 MAX_CONTEXT_TURNS = 6 # (ユーザーの発言 + AIの返答) の合計ターン数、トークン消費と相談して調整
 
-# !!! 重要: この user_sessions はメモリ上にあるため、Renderのスピンダウン/再起動でリセットされます。
-# !!! 永続化にはPostgreSQL, Redis, Firestoreなどを利用することを強く推奨します。
-# !!! 例として、簡略化した形でDBを使わず記述していますが、本番運用では必ず永続化してください。
+# !!! 重要: 本番環境では、この方法は推奨されません。
+# Flaskアプリケーションは、再起動（デプロイ、エラー、Renderのスピンダウンなど）のたびにメモリがリセットされ、
+# user_sessions のデータが失われます。
+# 会話履歴の永続化には、RenderのPostgreSQL, Redis, Google Cloud Firestore, AWS DynamoDBなどの
+# 永続的なデータストアを利用することを強く推奨します。
 user_sessions = {}
 
 @app.route("/callback", methods=['POST'])
@@ -97,6 +142,35 @@ def callback():
     app.logger.info("  Request body (truncated to 500 chars): " + body[:500])
     app.logger.info(f"  X-Line-Signature: {signature}")
 
+    # --- 署名検証のデバッグログ (通常はLINE Bot SDKが処理するため、本番ではコメントアウトまたは削除推奨) ---
+    # パフォーマンスに影響を与える可能性があるので、本番では非推奨
+    # import hmac
+    # import hashlib
+    # import base64 # 必要なモジュールを再度インポートするならここで行う
+    # try:
+    #     secret_bytes = CHANNEL_SECRET.encode('utf-8')
+    #     body_bytes = body.encode('utf-8')
+    #     hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
+    #     calculated_signature = base64.b64encode(hash_value).decode('utf-8')
+
+    #     app.logger.info(f"  Calculated signature (manual): {calculated_signature}")
+    #     app.logger.info(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
+
+    #     if calculated_signature != signature:
+    #         app.logger.error("!!! Manual Signature MISMATCH detected !!!")
+    #         app.logger.error(f"    Calculated: {calculated_signature}")
+    #         app.logger.error(f"    Received:    {signature}")
+    #         # 手動計算で不一致が検出された場合は、SDK処理に入る前に終了
+    #         abort(400)
+    #     else:
+    #         app.logger.info("  Manual signature check: Signatures match! Proceeding to SDK handler.")
+
+    # except Exception as e:
+    #     app.logger.error(f"Error during manual signature calculation for debug: {e}", exc_info=True)
+    #     # 手動計算でエラーが発生しても、SDKの処理は試みる
+    #     pass
+
+    # --- LINE Bot SDKによる署名検証とイベント処理 ---
     try:
         handler.handle(body, signature)
         app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Webhook handled successfully by SDK.")
@@ -106,8 +180,9 @@ def callback():
         app.logger.error(f"  Body (truncated for error log): {body[:200]}...")
         app.logger.error(f"  Signature sent to SDK: {signature}")
         app.logger.error(f"  Channel Secret configured for SDK (first 5 chars): {CHANNEL_SECRET[:5]}...")
-        abort(400)
+        abort(400) # 署名エラーの場合は400を返す
     except Exception as e:
+        # その他の予期せぬエラー
         logging.critical(f"[{time.time() - start_callback_time:.3f}s] Unhandled error during webhook processing by SDK: {e}", exc_info=True)
         abort(500)
 
@@ -140,7 +215,7 @@ def handle_message(event):
         # 現状ではアプリ再起動でリセットされるため、毎回初回はAPIを叩く
         start_get_profile = time.time()
         try:
-            profile_response = line_bot_api.get_profile(GetProfileRequest(user_id=user_id)) # v3 SDKのGetProfileRequestを使用
+            profile_response = line_bot_api.get_profile(GetProfileRequest(user_id=user_id))
             if profile_response and hasattr(profile_response, 'display_name'):
                 user_sessions[user_id]['display_name'] = profile_response.display_name
                 app.logger.info(f"[{time.time() - start_get_profile:.3f}s] Fetched display name for user {user_id}: {user_sessions[user_id]['display_name']}")
@@ -173,7 +248,7 @@ def handle_message(event):
         app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for initial/reset flow.")
         return 'OK' # 初回メッセージ送信後はここで処理を終了。この返信はGeminiを呼び出さない。
 
-    # Gemini API利用回数制限のチェック (変更なし)
+    # Gemini API利用回数制限のチェック
     if user_sessions[user_id]['request_count'] >= MAX_GEMINI_REQUESTS_PER_DAY:
         response_text = GEMINI_LIMIT_MESSAGE
         app.logger.warning(f"User {user_id} exceeded daily Gemini request limit ({MAX_GEMINI_REQUESTS_PER_DAY}).")
@@ -191,7 +266,7 @@ def handle_message(event):
         app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for limit exceeded flow.")
         return 'OK'
 
-    # 会話履歴を準備 (変更なし)
+    # 会話履歴を準備
     # システムプロンプトと初期応答を履歴の最初に含める
     chat_history_for_gemini = [
         {'role': 'user', 'parts': [{'text': MANAGEMENT_SUPPORT_SYSTEM_PROMPT}]},
@@ -223,7 +298,7 @@ def handle_message(event):
 
         app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Gemini generated response for user {user_id}: '{response_text}'")
 
-        # 会話履歴を更新 (user_sessionsに保存) (変更なし)
+        # 会話履歴を更新 (user_sessionsに保存)
         user_sessions[user_id]['history'].append(['user', user_message])
         user_sessions[user_id]['history'].append(['model', response_text])
         user_sessions[user_id]['request_count'] += 1
