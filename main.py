@@ -7,8 +7,8 @@ import time # 時間計測のために追加
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest
-# !!! ここを修正しました: GetProfileRequest のインポートパスを linebot.v3.messaging.models に変更 !!!
-from linebot.v3.messaging.models import GetProfileRequest 
+# !!! 修正: GetProfileRequest のインポートパスを変更しました !!!
+from linebot.v3.messaging.models import GetProfileRequest # GetProfileRequest は models サブモジュールにあります
 from linebot.v3.messaging import TextMessage as LineReplyTextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 
 # .envファイルから環境変数を読み込む（Renderでは環境変数が自動的に設定されるため、この行はコメントアウトを維持）
-# from dotenv import load_dotenv # load_dotenvはコメントアウトを維持
+# from dotenv import load_dotenv
 # load_dotenv()
 
 # 環境変数からLINEとGeminiのAPIキーを取得
@@ -98,7 +98,7 @@ MANAGEMENT_SUPPORT_SYSTEM_PROMPT = """
 """
 # これは例です。内容をさらに絞り込めるか検討してください。
 
-# 初期メッセージ (変更なし)
+# 初期メッセージ
 INITIAL_MESSAGE = """
 「役職者お悩みサポート」へようこそ。
 日々の事業所運営、職員の育成、利用者様への支援、多岐にわたる管理職のお仕事、本当にお疲れ様です。
@@ -108,7 +108,7 @@ INITIAL_MESSAGE = """
 私が、あなたの「相談役」として、最適な方向性を見つけるお手伝いをいたします。
 """
 
-# Gemini API利用制限時のメッセージ (変更なし)
+# Gemini API利用制限時のメッセージ
 GEMINI_LIMIT_MESSAGE = """
 申し訳ありません、本日の「役職者お悩みサポート」のご利用回数の上限に達しました。
 日々の激務の中、ご活用いただきありがとうございます。
@@ -118,14 +118,11 @@ GEMINI_LIMIT_MESSAGE = """
 明日、またお会いできることを楽しみにしております。
 """
 
-# 過去の会話履歴をGeminiに渡す最大ターン数
 MAX_CONTEXT_TURNS = 6 # (ユーザーの発言 + AIの返答) の合計ターン数、トークン消費と相談して調整
 
-# !!! 重要: 本番環境では、この方法は推奨されません。
-# Flaskアプリケーションは、再起動（デプロイ、エラー、Renderのスピンダウンなど）のたびにメモリがリセットされ、
-# user_sessions のデータが失われます。
-# 会話履歴の永続化には、RenderのPostgreSQL, Redis, Google Cloud Firestore, AWS DynamoDBなどの
-# 永続的なデータストアを利用することを強く推奨します。
+# !!! 重要: この user_sessions はメモリ上にあるため、Renderのスピンダウン/再起動でリセットされます。
+# !!! 永続化にはPostgreSQL, Redis, Firestoreなどを利用することを強く推奨します。
+# !!! 例として、簡略化した形でDBを使わず記述していますが、本番運用では必ず永続化してください。
 user_sessions = {}
 
 @app.route("/callback", methods=['POST'])
@@ -141,34 +138,6 @@ def callback():
     app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Received Webhook Request.")
     app.logger.info("  Request body (truncated to 500 chars): " + body[:500])
     app.logger.info(f"  X-Line-Signature: {signature}")
-
-    # --- 署名検証のデバッグログ (通常はLINE Bot SDKが処理するため、本番ではコメントアウトまたは削除推奨) ---
-    # パフォーマンスに影響を与える可能性があるので、本番では非推奨
-    # import hmac
-    # import hashlib
-    # import base64 # 必要なモジュールを再度インポートするならここで行う
-    # try:
-    #     secret_bytes = CHANNEL_SECRET.encode('utf-8')
-    #     body_bytes = body.encode('utf-8')
-    #     hash_value = hmac.new(secret_bytes, body_bytes, hashlib.sha256).digest()
-    #     calculated_signature = base64.b64encode(hash_value).decode('utf-8')
-
-    #     app.logger.info(f"  Calculated signature (manual): {calculated_signature}")
-    #     app.logger.info(f"  Channel Secret used for manual calc (first 5 chars): {CHANNEL_SECRET[:5]}...")
-
-    #     if calculated_signature != signature:
-    #         app.logger.error("!!! Manual Signature MISMATCH detected !!!")
-    #         app.logger.error(f"    Calculated: {calculated_signature}")
-    #         app.logger.error(f"    Received:    {signature}")
-    #         # 手動計算で不一致が検出された場合は、SDK処理に入る前に終了
-    #         abort(400)
-    #     else:
-    #         app.logger.info("  Manual signature check: Signatures match! Proceeding to SDK handler.")
-
-    # except Exception as e:
-    #     app.logger.error(f"Error during manual signature calculation for debug: {e}", exc_info=True)
-    #     # 手動計算でエラーが発生しても、SDKの処理は試みる
-    #     pass
 
     # --- LINE Bot SDKによる署名検証とイベント処理 ---
     try:
@@ -327,5 +296,7 @@ def handle_message(event):
     return 'OK'
 
 if __name__ == "__main__":
+    # Render環境ではPORT環境変数が設定されるため、それを使用する
+    # ローカル実行時にはデフォルトで8080を使用
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
