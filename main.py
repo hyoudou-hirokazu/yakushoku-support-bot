@@ -8,7 +8,7 @@ import threading # 非同期処理のためにthreadingをインポート
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest
-from linebot.v3.messaging.models import GetProfileRequest
+# from linebot.v3.messaging.models import GetProfileRequest # GetProfileRequestを除外
 from linebot.v3.messaging import TextMessage as LineReplyTextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
@@ -56,10 +56,10 @@ try:
     gemini_model = genai.GenerativeModel(
         'gemini-2.5-flash-lite-preview-06-17',
         safety_settings={
-            HarmCategory.HARMS_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARMS_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARMS_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARMS_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE, # 修正: HARMS_CATEGORYからHARM_CATEGORYへ
         }
     )
     logging.info("Gemini API configured successfully using 'gemini-2.5-flash-lite-preview-06-17' model.")
@@ -70,7 +70,7 @@ except Exception as e:
 # --- チャットボット関連の設定 ---
 MAX_GEMINI_REQUESTS_PER_DAY = 20
 
-# プロンプトの簡潔化を適用
+# プロンプトの簡潔化（変更なし、これが最終的な簡潔版）
 MANAGEMENT_SUPPORT_SYSTEM_PROMPT = """
 あなたは障害福祉施設の管理職向けAIサポート「役職者お悩みサポート」です。
 組織運営、人材育成、利用者支援、事業展開、法令遵守に関する悩みに、傾聴と共感を持ち、実践的かつ具体的なアドバイスを端的に提供してください。
@@ -81,7 +81,8 @@ AIの限界を認識し、必要に応じ専門家への相談を促してくだ
 応答は簡潔に、トークン消費を抑え、会話の発展を促すこと。
 """
 
-INITIAL_MESSAGE = """
+# ユーザー名を考慮しない汎用的な初期メッセージ
+INITIAL_MESSAGE_MANAGEMENT_BOT = """
 「役職者お悩みサポート」へようこそ。
 日々の事業所運営、職員の育成、利用者様への支援、多岐にわたる管理職のお仕事、本当にお疲れ様です。
 どんな些細なことでも構いませんので、今お悩みのことを気軽にご相談ください。
@@ -128,7 +129,6 @@ def callback():
     app.logger.info("  Request body (truncated to 500 chars): " + body[:500])
     app.logger.info(f"  X-Line-Signature: {signature}")
 
-    # --- LINE Bot SDKによる署名検証とイベント処理 ---
     try:
         handler.handle(body, signature)
         app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Webhook handled successfully by SDK.")
@@ -147,110 +147,85 @@ def handle_message(event):
     start_handle_time = time.time()
     user_id = event.source.user_id
     user_message = event.message.text
-    app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message received for user_id: '{user_id}', message: '{user_message}' (Reply Token: {event.reply_token})")
+    reply_token = event.reply_token
+    app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message received for user_id: '{user_id}', message: '{user_message}' (Reply Token: {reply_token})")
 
-    messages_to_send = []
     current_date = datetime.date.today()
 
-    # --- ユーザーセッションの初期化または取得 ---
-    if user_id not in user_sessions or user_sessions[user_id]['last_request_date'] != current_date:
-        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Initializing/Resetting session for user_id: {user_id}. First message of the day or new user.")
-        user_sessions[user_id] = {
-            'history': [],
-            'request_count': 0,
-            'last_request_date': current_date,
-            'display_name': "管理者" # デフォルト値を設定
-        }
+    def process_and_reply_async():
+        messages_to_send = []
+        response_text = "申し訳ありません、現在メッセージを処理できません。しばらくしてからもう一度お試しください。"
 
-        # ユーザー名取得 (初回のみ) は非同期処理の後で良い、または別スレッドで取得し次回以降のメッセージで反映する
-        # この初回メッセージの返信自体は、ユーザープロファイル取得を待たずに即時行う
-        personalized_initial_message = INITIAL_MESSAGE
-        
-        # ユーザー名取得は時間がかかる可能性があるため、非同期処理の恩恵を最大限受けるために、
-        # この初期メッセージでは表示しないか、別スレッドで取得して次のメッセージで反映を検討
-        # 今回は、初回メッセージで名前を取得するロジックは維持しつつ、非同期処理の外に出すことでWebhookの応答を早くする
+        if user_id not in user_sessions or user_sessions[user_id]['last_request_date'] != current_date:
+            app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Initializing/Resetting session for user_id: {user_id}. First message of the day or new user.")
+            user_sessions[user_id] = {
+                'history': [],
+                'request_count': 0,
+                'last_request_date': current_date,
+                'display_name': "管理者" # GetProfileRequestを使用しないため、汎用名を設定
+            }
+            response_text = INITIAL_MESSAGE_MANAGEMENT_BOT
+            messages_to_send.append(LineReplyTextMessage(text=response_text))
+            deferred_reply(reply_token, messages_to_send, user_id, start_handle_time)
+            app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for initial/reset flow (deferred reply).")
+            return
+
+        if user_sessions[user_id]['request_count'] >= MAX_GEMINI_REQUESTS_PER_DAY:
+            response_text = GEMINI_LIMIT_MESSAGE
+            app.logger.warning(f"User {user_id} exceeded daily Gemini request limit ({MAX_GEMINI_REQUESTS_PER_DAY}).")
+            messages_to_send.append(LineReplyTextMessage(text=response_text))
+            deferred_reply(reply_token, messages_to_send, user_id, start_handle_time)
+            app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for limit exceeded flow (deferred reply).")
+            return
+
+        chat_history_for_gemini = [
+            {'role': 'user', 'parts': [{'text': MANAGEMENT_SUPPORT_SYSTEM_PROMPT}]},
+            {'role': 'model', 'parts': [{'text': "はい、承知いたしました。管理職の皆様のお力になれるよう、「役職者お悩みサポート」が心を込めてお話を伺います。"}]}
+        ]
+
+        start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2)
+        app.logger.debug(f"[{time.time() - start_handle_time:.3f}s] Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
+
+        for role, text_content in user_sessions[user_id]['history'][start_index:]:
+            chat_history_for_gemini.append({'role': role, 'parts': [{'text': text_content}]})
+
+        app.logger.debug(f"[{time.time() - start_handle_time:.3f}s] Gemini chat history prepared for user {user_id} (last message: '{user_message}'): {chat_history_for_gemini}")
+
         try:
-            start_get_profile = time.time()
-            profile_response = line_bot_api.get_profile(GetProfileRequest(user_id=user_id))
-            if profile_response and hasattr(profile_response, 'display_name'):
-                user_sessions[user_id]['display_name'] = profile_response.display_name
-                app.logger.info(f"[{time.time() - start_get_profile:.3f}s] Fetched display name for user {user_id}: {user_sessions[user_id]['display_name']}")
-                personalized_initial_message = f"{user_sessions[user_id]['display_name']}さん、" + INITIAL_MESSAGE
+            start_gemini_call = time.time()
+            convo = gemini_model.start_chat(history=chat_history_for_gemini)
+            gemini_response = convo.send_message(user_message)
+            end_gemini_call = time.time()
+            app.logger.info(f"[{end_gemini_call - start_gemini_call:.3f}s] Gemini API call completed for user {user_id}.")
+
+            if gemini_response and hasattr(gemini_response, 'text'):
+                response_text = gemini_response.text
+            elif isinstance(gemini_response, list) and gemini_response and hasattr(gemini_response[0], 'text'):
+                response_text = gemini_response[0].text
             else:
-                app.logger.warning(f"[{time.time() - start_get_profile:.3f}s] Could not get display name for user {user_id}.")
-        except LineBotApiError as e:
-            app.logger.error(f"[{time.time() - start_get_profile:.3f}s] LineBotApiError getting user profile for {user_id}: {e}", exc_info=True)
+                logging.warning(f"[{time.time() - start_handle_time:.3f}s] Unexpected Gemini response format or no text content: {gemini_response}")
+                response_text = "Geminiからの応答形式が予期せぬものでした。"
+
+            app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Gemini generated response for user {user_id}: '{response_text}'")
+
+            user_sessions[user_id]['history'].append(['user', user_message])
+            user_sessions[user_id]['history'].append(['model', response_text])
+            user_sessions[user_id]['request_count'] += 1
+            user_sessions[user_id]['last_request_date'] = current_date
+            app.logger.info(f"[{time.time() - start_handle_time:.3f}s] User {user_id} - Request count: {user_sessions[user_id]['request_count']}")
+
         except Exception as e:
-            app.logger.error(f"[{time.time() - start_get_profile:.3f}s] Unexpected error getting user profile for {user_id}: {e}", exc_info=True)
+            logging.error(f"[{time.time() - start_handle_time:.3f}s] Error interacting with Gemini API for user {user_id}: {e}", exc_info=True)
+            response_text = "Geminiとの通信中にエラーが発生しました。時間を置いてお試しください。"
 
-        messages_to_send.append(LineReplyTextMessage(text=personalized_initial_message))
-        
-        # 非同期でLINEに返信
-        threading.Thread(target=deferred_reply, args=(event.reply_token, messages_to_send, user_id, start_handle_time)).start()
-        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for initial/reset flow (deferred reply).")
-        return 'OK'
+        finally:
+            messages_to_send.append(LineReplyTextMessage(text=response_text))
+            deferred_reply(reply_token, messages_to_send, user_id, start_handle_time)
 
-    # Gemini API利用回数制限のチェック
-    if user_sessions[user_id]['request_count'] >= MAX_GEMINI_REQUESTS_PER_DAY:
-        response_text = GEMINI_LIMIT_MESSAGE
-        app.logger.warning(f"User {user_id} exceeded daily Gemini request limit ({MAX_GEMINI_REQUESTS_PER_DAY}).")
-        messages_to_send.append(LineReplyTextMessage(text=response_text))
+        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Total process_and_reply_async processing time.")
 
-        # 非同期でLINEに返信
-        threading.Thread(target=deferred_reply, args=(event.reply_token, messages_to_send, user_id, start_handle_time)).start()
-        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message finished for limit exceeded flow (deferred reply).")
-        return 'OK'
-
-    # 会話履歴を準備
-    chat_history_for_gemini = [
-        {'role': 'user', 'parts': [{'text': MANAGEMENT_SUPPORT_SYSTEM_PROMPT}]},
-        {'role': 'model', 'parts': [{'text': "はい、承知いたしました。管理職の皆様のお力になれるよう、「役職者お悩みサポート」が心を込めてお話を伺います。"}]}
-    ]
-
-    start_index = max(0, len(user_sessions[user_id]['history']) - MAX_CONTEXT_TURNS * 2)
-    app.logger.debug(f"[{time.time() - start_handle_time:.3f}s] Current history length for user {user_id}: {len(user_sessions[user_id]['history'])}. Taking from index {start_index}.")
-
-    for role, text_content in user_sessions[user_id]['history'][start_index:]:
-        chat_history_for_gemini.append({'role': role, 'parts': [{'text': text_content}]})
-
-    app.logger.debug(f"[{time.time() - start_handle_time:.3f}s] Gemini chat history prepared for user {user_id} (last message: '{user_message}'): {chat_history_for_gemini}")
-
-    response_text = "申し訳ありません、現在メッセージを処理できません。しばらくしてからもう一度お試しください。" # デフォルトエラーメッセージ
-
-    try:
-        start_gemini_call = time.time()
-        convo = gemini_model.start_chat(history=chat_history_for_gemini)
-        gemini_response = convo.send_message(user_message)
-        end_gemini_call = time.time()
-        app.logger.info(f"[{end_gemini_call - start_gemini_call:.3f}s] Gemini API call completed for user {user_id}.")
-
-        if gemini_response and hasattr(gemini_response, 'text'):
-            response_text = gemini_response.text
-        elif isinstance(gemini_response, list) and gemini_response and hasattr(gemini_response[0], 'text'):
-            response_text = gemini_response[0].text
-        else:
-            logging.warning(f"[{time.time() - start_handle_time:.3f}s] Unexpected Gemini response format or no text content: {gemini_response}")
-            response_text = "Geminiからの応答形式が予期せぬものでした。"
-
-        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Gemini generated response for user {user_id}: '{response_text}'")
-
-        # 会話履歴を更新
-        user_sessions[user_id]['history'].append(['user', user_message])
-        user_sessions[user_id]['history'].append(['model', response_text])
-        user_sessions[user_id]['request_count'] += 1
-        user_sessions[user_id]['last_request_date'] = current_date
-        app.logger.info(f"[{time.time() - start_handle_time:.3f}s] User {user_id} - Request count: {user_sessions[user_id]['request_count']}")
-
-    except Exception as e:
-        logging.error(f"[{time.time() - start_handle_time:.3f}s] Error interacting with Gemini API for user {user_id}: {e}", exc_info=True)
-        response_text = "Geminiとの通信中にエラーが発生しました。時間を置いてお試しください。"
-
-    finally:
-        messages_to_send.append(LineReplyTextMessage(text=response_text))
-        # 非同期でLINEに返信
-        threading.Thread(target=deferred_reply, args=(event.reply_token, messages_to_send, user_id, start_handle_time)).start()
-
-    app.logger.info(f"[{time.time() - start_handle_time:.3f}s] Total handle_message processing time (deferred reply).")
+    threading.Thread(target=process_and_reply_async).start()
+    app.logger.info(f"[{time.time() - start_handle_time:.3f}s] handle_message immediately returned OK for user {user_id}.")
     return 'OK'
 
 if __name__ == "__main__":
