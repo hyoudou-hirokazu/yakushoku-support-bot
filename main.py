@@ -3,7 +3,7 @@ import logging
 from flask import Flask, request, abort
 import datetime
 import time
-import threading # 非同期処理のためにthreadingをインポート
+import threading
 
 # LINE Bot SDK v3 のインポート
 from linebot.v3.webhook import WebhookHandler
@@ -56,10 +56,10 @@ try:
     gemini_model = genai.GenerativeModel(
         'gemini-2.5-flash-lite-preview-06-17',
         safety_settings={
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE, # 修正: HARMS_CATEGORYからHARM_CATEGORYへ
+            HarmCategory.HARASSMENT: HarmBlockThreshold.BLOCK_NONE, # 修正箇所
+            HarmCategory.HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE, # 修正箇所
+            HarmCategory.SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE, # 修正箇所
+            HarmCategory.DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE, # 修正箇所
         }
     )
     logging.info("Gemini API configured successfully using 'gemini-2.5-flash-lite-preview-06-17' model.")
@@ -70,7 +70,7 @@ except Exception as e:
 # --- チャットボット関連の設定 ---
 MAX_GEMINI_REQUESTS_PER_DAY = 20
 
-# プロンプトの簡潔化（変更なし、これが最終的な簡潔版）
+# プロンプトの簡潔化
 MANAGEMENT_SUPPORT_SYSTEM_PROMPT = """
 あなたは障害福祉施設の管理職向けAIサポート「役職者お悩みサポート」です。
 組織運営、人材育成、利用者支援、事業展開、法令遵守に関する悩みに、傾聴と共感を持ち、実践的かつ具体的なアドバイスを端的に提供してください。
@@ -140,7 +140,7 @@ def callback():
         abort(500)
 
     app.logger.info(f"[{time.time() - start_callback_time:.3f}s] Total callback processing time.")
-    return 'OK' # ここで即座にOKを返す
+    return 'OK'
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
